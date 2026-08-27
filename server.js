@@ -6,6 +6,11 @@ import { pool } from "./db.js";
 import authRoutes from "./routes/auth.routes.js";
 import listingRoutes from "./routes/listings.routes.js";
 import marketRoutes from "./routes/market.routes.js";
+import { createServer } from "http";
+import { initSocket } from "./socket.js";
+import chatRoutes from "./routes/chat.routes.js";
+import userRoutes from "./routes/user.routes.js";
+import path from "path";
 dotenv.config();
 const app = express();
 
@@ -28,6 +33,9 @@ app.get("/health", async (req, res) => {
 app.use("/auth", authRoutes);
 app.use("/listings", listingRoutes);
 app.use("/", marketRoutes);
+app.use("/", chatRoutes);
+app.use("/", userRoutes);
+app.use("/uploads", express.static(path.resolve("uploads"), { maxAge: "30d" }));
 // ── 404 ──
 app.use((req, res) => res.status(404).json({ error: "Route inconnue" }));
 
@@ -37,5 +45,9 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: "Erreur serveur" });
 });
 
+
+const httpServer = createServer(app);
+const io = initSocket(httpServer);
+app.set("io", io);   // accessible depuis les routes
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`API sur http://localhost:${PORT}`));
+httpServer.listen(PORT, () => console.log(`API + WebSocket sur http://localhost:${PORT}`));
