@@ -5,7 +5,7 @@ import dotenv from "dotenv";
 import { pool } from "./db.js";
 import authRoutes from "./routes/auth.routes.js";
 import listingRoutes from "./routes/listings.routes.js";
-
+import marketRoutes from "./routes/market.routes.js";
 dotenv.config();
 const app = express();
 
@@ -27,7 +27,7 @@ app.get("/health", async (req, res) => {
 // ── Routes ──
 app.use("/auth", authRoutes);
 app.use("/listings", listingRoutes);
-
+app.use("/", marketRoutes);
 // ── 404 ──
 app.use((req, res) => res.status(404).json({ error: "Route inconnue" }));
 
