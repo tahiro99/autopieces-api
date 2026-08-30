@@ -2,6 +2,7 @@ import express from "express";
 import { z } from "zod";
 import { pool } from "../db.js";
 import { requireAuth } from "../auth.js";
+import { notify } from "../push.js";
 
 const router = express.Router();
 
@@ -94,7 +95,6 @@ const toOrder = (o) => ({
   createdAt: o.created_at,
 });
 
-// Mes commandes (acheteur) ou celles de ma boutique (vendeur)
 router.get("/orders", requireAuth, async (req, res) => {
   const asSeller = req.query.as === "seller";
   try {
@@ -123,7 +123,7 @@ router.post("/orders", requireAuth, async (req, res) => {
     await client.query("BEGIN");
 
     // Verrou sur la ligne : deux commandes simultanées ne peuvent pas
-    // vider le même stock. Impossible à garantir avec Firestore.
+    // vider le même stock.
     const l = await client.query(
       "SELECT * FROM listings WHERE id = $1 AND status = 'active' FOR UPDATE",
       [d.listingId]
@@ -163,16 +163,16 @@ router.post("/orders", requireAuth, async (req, res) => {
 
     await client.query("UPDATE listings SET stock = stock - $1 WHERE id = $2", [d.qty, listing.id]);
 
-    await client.query(`
-      INSERT INTO notifications (user_id, type, title, body, data)
-      VALUES ($1,'commande','Nouvelle commande 📦',$2,$3)
-    `, [
-      listing.seller_id,
-      `"${listing.title}" — ${listing.price.toLocaleString()} DA`,
-      JSON.stringify({ screen: "SellerDashboard", orderId: r.rows[0].id }),
-    ]);
-
     await client.query("COMMIT");
+
+    // Hors transaction : notify ouvre sa propre connexion
+    notify(listing.seller_id, {
+      type: "commande",
+      title: "Nouvelle commande 📦",
+      body: `"${listing.title}" — ${listing.price.toLocaleString()} DA`,
+      data: { screen: "SellerDashboard", orderId: r.rows[0].id },
+    }).catch(() => {});
+
     res.status(201).json(toOrder(r.rows[0]));
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
@@ -230,7 +230,6 @@ router.patch("/orders/:id/status", requireAuth, async (req, res) => {
       }
     }
 
-    // Transition valide ? On ne peut pas passer de pending à delivered.
     if (!FLOW[o.status]?.includes(status)) {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: `Transition ${o.status} → ${status} impossible` });
@@ -243,19 +242,17 @@ router.patch("/orders/:id/status", requireAuth, async (req, res) => {
       await client.query("UPDATE listings SET stock = stock + $1 WHERE id = $2", [o.qty, o.listing_id]);
     }
 
-    // Notifier l'autre partie
+    await client.query("COMMIT");
+
     if (NOTIF[status]) {
-      await client.query(`
-        INSERT INTO notifications (user_id, type, title, body, data)
-        VALUES ($1,'livraison','Commande mise à jour',$2,$3)
-      `, [
-        isSeller ? o.buyer_id : o.seller_id,
-        NOTIF[status],
-        JSON.stringify({ screen: isSeller ? "Orders" : "SellerDashboard", orderId: o.id }),
-      ]);
+      notify(isSeller ? o.buyer_id : o.seller_id, {
+        type: "livraison",
+        title: "Commande mise à jour",
+        body: NOTIF[status],
+        data: { screen: isSeller ? "Orders" : "SellerDashboard", orderId: o.id },
+      }).catch(() => {});
     }
 
-    await client.query("COMMIT");
     res.json({ ok: true, status });
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
@@ -293,14 +290,12 @@ router.post("/orders/:id/rate", requireAuth, async (req, res) => {
 
     await pool.query("UPDATE orders SET rated = true WHERE id = $1", [o.id]);
 
-    await pool.query(`
-      INSERT INTO notifications (user_id, type, title, body, data)
-      VALUES ($1,'rating',$2,$3,$4)
-    `, [
-      o.seller_id, `⭐ Nouvelle évaluation : ${stars}/5`,
-      comment || "Vous avez reçu une nouvelle note.",
-      JSON.stringify({ screen: "SellerDashboard" }),
-    ]);
+    notify(o.seller_id, {
+      type: "rating",
+      title: `⭐ Nouvelle évaluation : ${stars}/5`,
+      body: comment || "Vous avez reçu une nouvelle note.",
+      data: { screen: "SellerDashboard" },
+    }).catch(() => {});
 
     res.status(201).json({ ok: true });
   } catch (e) {
@@ -309,7 +304,6 @@ router.post("/orders/:id/rate", requireAuth, async (req, res) => {
   }
 });
 
-// Notes d'un vendeur (publiques)
 router.get("/sellers/:id/ratings", async (req, res) => {
   try {
     const r = await pool.query(`

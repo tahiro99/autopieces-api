@@ -2,6 +2,7 @@ import express from "express";
 import { z } from "zod";
 import { pool } from "../db.js";
 import { requireAuth } from "../auth.js";
+import { notify } from "../push.js";
 
 const router = express.Router();
 
@@ -16,7 +17,6 @@ const toConv = (c, uid) => {
     listingPrice: c.listing_price,
     lastMessage: c.last_message,
     lastMessageAt: c.last_message_at,
-    // Le nom affiché dépend de qui regarde
     otherName: iAmSeller ? (c.buyer_name || "Client") : (c.seller_name || "Vendeur"),
     otherId:   iAmSeller ? c.buyer_id : c.seller_id,
     unread: Number(c.unread) || 0,
@@ -76,7 +76,6 @@ router.post("/conversations", requireAuth, async (req, res) => {
       return res.status(400).json({ error: "C'est votre propre annonce" });
     }
 
-    // UNIQUE (buyer_id, listing_id) garantit une seule conversation par couple
     const r = await pool.query(`
       INSERT INTO conversations (buyer_id, seller_id, listing_id, listing_title, listing_price)
       VALUES ($1,$2,$3,$4,$5)
@@ -107,7 +106,6 @@ router.get("/conversations/:id/messages", requireAuth, async (req, res) => {
       ORDER BY created_at ASC LIMIT 500
     `, [req.params.id]);
 
-    // Marquer comme lus les messages de l'autre
     await pool.query(`
       UPDATE messages SET read = true
       WHERE conversation_id = $1 AND sender_id <> $2 AND read = false
@@ -177,17 +175,18 @@ router.post("/conversations/:id/messages", requireAuth, async (req, res) => {
       UPDATE conversations SET last_message = $1, last_message_at = now() WHERE id = $2
     `, [isImg ? "📷 Image" : parsed.data.text.trim().slice(0, 100), conv.id]);
 
-    await client.query(`
-      INSERT INTO notifications (user_id, type, title, body, data)
-      VALUES ($1,'message','Nouveau message 💬',$2,$3)
-    `, [other, isImg ? "Vous a envoyé une image" : parsed.data.text.trim().slice(0, 80),
-        JSON.stringify({ screen: "Chat", conversationId: conv.id })]);
-
     await client.query("COMMIT");
 
     const msg = toMsg(m.rows[0]);
 
-    // Diffusion temps réel aux deux participants
+    notify(other, {
+      type: "message",
+      title: "Nouveau message 💬",
+      body: isImg ? "Vous a envoyé une image" : parsed.data.text.trim().slice(0, 80),
+      data: { screen: "Chat", conversationId: conv.id },
+    }).catch(() => {});
+
+    // Diffusion temps réel
     req.app.get("io")?.to(`conv:${conv.id}`).emit("message", msg);
     req.app.get("io")?.to(`user:${other}`).emit("conversation_updated", { conversationId: conv.id });
 
