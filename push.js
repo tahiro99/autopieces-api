@@ -1,14 +1,15 @@
-import admin from "firebase-admin";
+import { initializeApp, cert } from "firebase-admin/app";
+import { getMessaging } from "firebase-admin/messaging";
 import { readFileSync, existsSync } from "fs";
 import { pool } from "./db.js";
 
-let ready = false;
+let messaging = null;
 
 try {
   if (existsSync("./firebase-key.json")) {
     const key = JSON.parse(readFileSync("./firebase-key.json", "utf8"));
-    admin.initializeApp({ credential: admin.credential.cert(key) });
-    ready = true;
+    const app = initializeApp({ credential: cert(key) });
+    messaging = getMessaging(app);
     console.log("[push] FCM initialisé");
   } else {
     console.warn("[push] firebase-key.json absent — notifications push désactivées");
@@ -18,7 +19,7 @@ try {
 }
 
 export async function sendPush(userId, { title, body, data = {} }) {
-  if (!ready) return;
+  if (!messaging) return;
 
   try {
     const r = await pool.query("SELECT fcm_tokens FROM users WHERE id = $1", [userId]);
@@ -31,11 +32,14 @@ export async function sendPush(userId, { title, body, data = {} }) {
       if (v != null) clean[k] = String(v);
     }
 
-    const resp = await admin.messaging().sendEachForMulticast({
+    const resp = await messaging.sendEachForMulticast({
       tokens,
       notification: { title, body },
       data: clean,
-      android: { priority: "high", notification: { channelId: "default", sound: "default" } },
+      android: {
+        priority: "high",
+        notification: { channelId: "default", sound: "default" },
+      },
     });
 
     // Purge des jetons morts : sinon la liste grossit indéfiniment
@@ -53,7 +57,7 @@ export async function sendPush(userId, { title, body, data = {} }) {
 
     if (dead.length) {
       await pool.query(
-        "UPDATE users SET fcm_tokens = (SELECT array_agg(t) FROM unnest(fcm_tokens) t WHERE t <> ALL($1)) WHERE id = $2",
+        "UPDATE users SET fcm_tokens = (SELECT COALESCE(array_agg(t), '{}') FROM unnest(fcm_tokens) t WHERE t <> ALL($1)) WHERE id = $2",
         [dead, userId]
       );
       console.log(`[push] ${dead.length} jeton(s) obsolète(s) retiré(s)`);
@@ -70,6 +74,7 @@ export async function notify(userId, { type, title, body, data = {} }) {
       INSERT INTO notifications (user_id, type, title, body, data)
       VALUES ($1,$2,$3,$4,$5)
     `, [userId, type || "general", title, body || "", JSON.stringify(data)]);
+
     await sendPush(userId, { title, body, data });
   } catch (e) {
     console.error("[notify]", e.message);
