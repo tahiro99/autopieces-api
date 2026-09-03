@@ -38,6 +38,7 @@ const loginSchema = z.object({
 // Objet utilisateur renvoyé au client — jamais le hash
 const publicUser = (u) => ({
   id: u.id,
+  uid: u.id,          // ← alias pour compatibilité avec l'app
   email: u.email,
   displayName: u.display_name,
   phone: u.phone,
