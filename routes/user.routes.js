@@ -41,7 +41,7 @@ router.patch("/me", requireAuth, async (req, res) => {
     );
     const u = r.rows[0];
     res.json({
-      id: u.id, email: u.email, displayName: u.display_name,
+      id: u.id, uid: u.id, email: u.email, displayName: u.display_name,
       phone: u.phone, wilaya: u.wilaya, role: u.role,
       photoURL: u.photo_url, verified: u.verified,
       blockedUsers: u.blocked_users || [],
