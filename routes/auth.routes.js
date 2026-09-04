@@ -9,7 +9,8 @@ import {
   requireAuth, createAuthToken, consumeAuthToken,
   tooManyAttempts, logAttempt,
 } from "../auth.js";
-
+import { OAuth2Client } from "google-auth-library";
+import crypto from "crypto";
 const router = express.Router();
 
 // Limite globale par IP, en plus de la limite par compte
@@ -226,5 +227,76 @@ router.post("/reset-password", authLimiter, async (req, res) => {
     res.status(500).json({ error: "Erreur serveur" });
   }
 });
+// ══ CONNEXION GOOGLE ══
+// L'app envoie l'idToken reçu de Google, le serveur le vérifie auprès de Google
+const GOOGLE_CLIENT_IDS = (process.env.GOOGLE_CLIENT_IDS || "")
+  .split(",").map(s => s.trim()).filter(Boolean);
 
+const googleClient = new OAuth2Client();
+
+router.post("/google", authLimiter, async (req, res) => {
+  const idToken = String(req.body?.idToken || "");
+  if (!idToken) return res.status(400).json({ error: "Jeton manquant" });
+
+  let payload;
+  try {
+    const ticket = await googleClient.verifyIdToken({
+      idToken,
+      audience: GOOGLE_CLIENT_IDS.length ? GOOGLE_CLIENT_IDS : undefined,
+    });
+    payload = ticket.getPayload();
+  } catch (e) {
+    console.error("[google]", e.message);
+    return res.status(401).json({ error: "Jeton Google invalide" });
+  }
+
+  const email = (payload?.email || "").toLowerCase();
+  if (!email || !payload.email_verified) {
+    return res.status(400).json({ error: "Compte Google sans e-mail vérifié" });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    // Compte existant par google_id, sinon par e-mail
+    let r = await client.query("SELECT * FROM users WHERE google_id = $1", [payload.sub]);
+
+    if (!r.rows.length) {
+      r = await client.query("SELECT * FROM users WHERE email = $1", [email]);
+
+      if (r.rows.length) {
+        // Compte e-mail existant → on y rattache Google
+        await client.query("UPDATE users SET google_id = $1, email_verified = true WHERE id = $2",
+          [payload.sub, r.rows[0].id]);
+      } else {
+        // Nouveau compte, sans mot de passe
+        r = await client.query(`
+          INSERT INTO users (id, email, google_id, display_name, photo_url, email_verified)
+          VALUES ($1,$2,$3,$4,$5,true)
+          RETURNING *
+        `, [
+          crypto.randomUUID(), email, payload.sub,
+          payload.name || email.split("@")[0],
+          payload.picture || null,
+        ]);
+      }
+    }
+
+    const user = r.rows[0];
+    await client.query("UPDATE users SET last_login_at = now() WHERE id = $1", [user.id]);
+    await client.query("COMMIT");
+
+    const accessToken  = signAccessToken(user);
+    const refreshToken = await issueRefreshToken(user.id, req);
+
+    res.json({ user: publicUser(user), accessToken, refreshToken });
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("[google auth]", e.message);
+    res.status(500).json({ error: "Erreur serveur" });
+  } finally {
+    client.release();
+  }
+});
 export default router;
