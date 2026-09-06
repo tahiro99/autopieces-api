@@ -63,12 +63,18 @@ router.get("/conversations", requireAuth, async (req, res) => {
 });
 
 // ══ OUVRIR / CRÉER UNE CONVERSATION ══
+// ══ OUVRIR / CRÉER UNE CONVERSATION ══
 router.post("/conversations", requireAuth, async (req, res) => {
   const listingId = String(req.body?.listingId || "");
   if (!listingId) return res.status(400).json({ error: "Annonce manquante" });
 
   try {
-    const l = await pool.query("SELECT * FROM listings WHERE id = $1", [listingId]);
+    const l = await pool.query(`
+      SELECT l.*, u.display_name AS seller_name
+      FROM listings l LEFT JOIN users u ON u.id = l.seller_id
+      WHERE l.id = $1
+    `, [listingId]);
+
     if (!l.rows.length) return res.status(404).json({ error: "Annonce introuvable" });
 
     const listing = l.rows[0];
@@ -83,7 +89,13 @@ router.post("/conversations", requireAuth, async (req, res) => {
       RETURNING *
     `, [req.user.id, listing.seller_id, listing.id, listing.title, listing.price]);
 
-    res.json(toConv({ ...r.rows[0], seller_name: "", buyer_name: "" }, req.user.id));
+    const me = await pool.query("SELECT display_name FROM users WHERE id = $1", [req.user.id]);
+
+    res.json(toConv({
+      ...r.rows[0],
+      seller_name: listing.seller_name || "",
+      buyer_name:  me.rows[0]?.display_name || "",
+    }, req.user.id));
   } catch (e) {
     console.error("[create conv]", e.message);
     res.status(500).json({ error: "Erreur serveur" });
