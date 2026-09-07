@@ -75,7 +75,7 @@ router.post("/me/role", requireAuth, async (req, res) => {
     if (role === "vendeur") {
       await client.query(`
         INSERT INTO subscriptions (user_id, status, plan, current_period_end)
-        VALUES ($1,'trial','monthly', now() + interval '14 days')
+        VALUES ($1,'trial','monthly', now() + interval '2 months')
       `, [req.user.id]);
     }
 
@@ -235,5 +235,23 @@ router.post("/upload", requireAuth, upload.single("image"), async (req, res) => 
     res.status(400).json({ error: "Image invalide" });
   }
 });
+// ── Demande de renouvellement ──
+router.post("/me/subscription/renew", requireAuth, async (req, res) => {
+  const { plan, months, amount, phone, receiptUrl } = req.body || {};
 
+  try {
+    await pool.query(`
+      INSERT INTO subscription_requests
+        (user_id, plan, months, amount, phone, receipt_url, status)
+      VALUES ($1,$2,$3,$4,$5,$6,'pending')
+    `, [
+      req.user.id, plan || "monthly", Number(months) || 1,
+      Number(amount) || 0, phone || "", receiptUrl || null,
+    ]);
+    res.status(201).json({ ok: true });
+  } catch (e) {
+    console.error("[renew]", e.message);
+    res.status(500).json({ error: "Erreur serveur" });
+  }
+});
 export default router;
