@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import dotenv from "dotenv";
 import path from "path";
 import { createServer } from "http";
@@ -20,6 +21,16 @@ app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 app.set("trust proxy", 1);
+
+// ── Limite globale par IP ──
+app.use(rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.path === "/health",   // laisse passer la supervision
+  message: { error: "Trop de requêtes, patientez un instant" },
+}));
 
 // ── Santé du serveur ──
 app.get("/health", async (req, res) => {

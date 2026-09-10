@@ -6,7 +6,7 @@ import path from "path";
 import { z } from "zod";
 import { pool } from "../db.js";
 import { requireAuth } from "../auth.js";
-
+import rateLimit from "express-rate-limit";
 const router = express.Router();
 const UPLOAD_DIR = path.resolve("uploads");
 const PUBLIC_URL = process.env.PUBLIC_URL || "http://localhost:3000";
@@ -197,8 +197,13 @@ const upload = multer({
     cb(null, true);
   },
 });
+const uploadLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 40,
+  message: { error: "Limite d'envoi atteinte, réessayez plus tard" },
+});
 
-router.post("/upload", requireAuth, upload.single("image"), async (req, res) => {
+router.post("/upload", uploadLimiter, requireAuth, upload.single("image"), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "Aucun fichier" });
 
   const kind = ["listing", "chat", "profile"].includes(req.body?.kind)
