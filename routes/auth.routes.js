@@ -298,4 +298,83 @@ router.post("/google", authLimiter, async (req, res) => {
     client.release();
   }
 });
+// ══ CONNEXION FACEBOOK ══
+// L'app envoie l'access_token, le serveur le vérifie auprès de Facebook
+router.post("/facebook", authLimiter, async (req, res) => {
+  const accessToken = String(req.body?.accessToken || "");
+  if (!accessToken) return res.status(400).json({ error: "Jeton manquant" });
+
+  let fb;
+  try {
+    // Vérifie que le jeton appartient bien à NOTRE application
+    const appId     = process.env.FACEBOOK_APP_ID;
+    const appSecret = process.env.FACEBOOK_APP_SECRET;
+
+    if (appId && appSecret) {
+      const dbg = await fetch(
+        `https://graph.facebook.com/debug_token?input_token=${encodeURIComponent(accessToken)}` +
+        `&access_token=${appId}|${appSecret}`
+      ).then((r) => r.json());
+
+      if (!dbg?.data?.is_valid || String(dbg.data.app_id) !== String(appId)) {
+        return res.status(401).json({ error: "Jeton Facebook invalide" });
+      }
+    }
+
+    fb = await fetch(
+      `https://graph.facebook.com/me?fields=id,name,email,picture.type(large)` +
+      `&access_token=${encodeURIComponent(accessToken)}`
+    ).then((r) => r.json());
+
+    if (!fb?.id) return res.status(401).json({ error: "Jeton Facebook invalide" });
+  } catch (e) {
+    console.error("[facebook]", e.message);
+    return res.status(401).json({ error: "Jeton Facebook invalide" });
+  }
+
+  // Facebook ne fournit pas toujours l'e-mail
+  const email = (fb.email || "").toLowerCase() || `fb_${fb.id}@facebook.local`;
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    let r = await client.query("SELECT * FROM users WHERE facebook_id = $1", [fb.id]);
+
+    if (!r.rows.length) {
+      r = await client.query("SELECT * FROM users WHERE email = $1", [email]);
+
+      if (r.rows.length) {
+        await client.query("UPDATE users SET facebook_id = $1 WHERE id = $2",
+          [fb.id, r.rows[0].id]);
+      } else {
+        r = await client.query(`
+          INSERT INTO users (id, email, facebook_id, display_name, photo_url, email_verified)
+          VALUES ($1,$2,$3,$4,$5,$6)
+          RETURNING *
+        `, [
+          crypto.randomUUID(), email, fb.id,
+          fb.name || email.split("@")[0],
+          fb.picture?.data?.url || null,
+          !!fb.email,
+        ]);
+      }
+    }
+
+    const user = r.rows[0];
+    await client.query("UPDATE users SET last_login_at = now() WHERE id = $1", [user.id]);
+    await client.query("COMMIT");
+
+    const accessJwt   = signAccessToken(user);
+    const refreshJwt  = await issueRefreshToken(user.id, req);
+
+    res.json({ user: publicUser(user), accessToken: accessJwt, refreshToken: refreshJwt });
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("[facebook auth]", e.message);
+    res.status(500).json({ error: "Erreur serveur" });
+  } finally {
+    client.release();
+  }
+});
 export default router;
