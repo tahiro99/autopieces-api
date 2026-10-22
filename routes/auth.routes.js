@@ -12,7 +12,6 @@ import {
 import { OAuth2Client } from "google-auth-library";
 const router = express.Router();
 
-// Limite globale par IP, en plus de la limite par compte
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 30,
@@ -21,7 +20,6 @@ const authLimiter = rateLimit({
   message: { error: "Trop de tentatives, réessayez dans quelques minutes" },
 });
 
-// ── Validation ──
 const registerSchema = z.object({
   email:       z.string().email().max(255),
   password:    z.string().min(8).max(128),
@@ -35,10 +33,9 @@ const loginSchema = z.object({
   password: z.string().min(1).max(128),
 });
 
-// Objet utilisateur renvoyé au client — jamais le hash
 const publicUser = (u) => ({
   id: u.id,
-  uid: u.id,          // ← alias pour compatibilité avec l'app
+  uid: u.id,         
   email: u.email,
   displayName: u.display_name,
   phone: u.phone,
@@ -50,7 +47,6 @@ const publicUser = (u) => ({
   blockedUsers: u.blocked_users || [],
 });
 
-// ══ INSCRIPTION ══
 router.post("/register", authLimiter, async (req, res) => {
   const parsed = registerSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -79,7 +75,6 @@ router.post("/register", authLimiter, async (req, res) => {
     const accessToken  = signAccessToken(user);
     const refreshToken = await issueRefreshToken(user.id, req);
 
-    // Jeton de vérification — l'envoi d'e-mail viendra plus tard
     const verifyToken = await createAuthToken(user.id, "verify_email", 48);
     console.log(`[verify] ${mail} → ${verifyToken}`);
 
@@ -90,7 +85,6 @@ router.post("/register", authLimiter, async (req, res) => {
   }
 });
 
-// ══ CONNEXION ══
 router.post("/login", authLimiter, async (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Données invalides" });
@@ -105,8 +99,6 @@ router.post("/login", authLimiter, async (req, res) => {
     const r = await pool.query("SELECT * FROM users WHERE email = $1", [mail]);
     const user = r.rows[0];
 
-    // Message identique si le compte n'existe pas ou si le mot de passe est faux :
-    // sinon on révèle quels e-mails sont inscrits.
     if (!user || !user.password_hash) {
       await logAttempt(mail, req.ip, false);
       return res.status(401).json({ error: "E-mail ou mot de passe incorrect" });
@@ -130,8 +122,6 @@ router.post("/login", authLimiter, async (req, res) => {
     res.status(500).json({ error: "Erreur serveur" });
   }
 });
-
-// ══ RAFRAÎCHISSEMENT ══
 router.post("/refresh", async (req, res) => {
   const { refreshToken } = req.body || {};
   if (!refreshToken) return res.status(400).json({ error: "Jeton manquant" });
@@ -145,14 +135,11 @@ router.post("/refresh", async (req, res) => {
   }
 });
 
-// ══ DÉCONNEXION ══
 router.post("/logout", async (req, res) => {
   const { refreshToken } = req.body || {};
   if (refreshToken) await revokeRefreshToken(refreshToken).catch(() => {});
   res.json({ ok: true });
 });
-
-// ══ PROFIL COURANT ══
 router.get("/me", requireAuth, async (req, res) => {
   try {
     const r = await pool.query("SELECT * FROM users WHERE id = $1", [req.user.id]);
@@ -163,7 +150,6 @@ router.get("/me", requireAuth, async (req, res) => {
   }
 });
 
-// ══ CHANGER LE MOT DE PASSE ══
 router.post("/change-password", requireAuth, async (req, res) => {
   const { current, next } = req.body || {};
   if (!current || !next || next.length < 8) {
@@ -180,7 +166,6 @@ router.post("/change-password", requireAuth, async (req, res) => {
     await pool.query("UPDATE users SET password_hash = $1 WHERE id = $2",
       [await hashPassword(next), req.user.id]);
 
-    // Toutes les autres sessions sont fermées
     await revokeAllSessions(req.user.id);
     const refreshToken = await issueRefreshToken(req.user.id, req);
 
@@ -190,7 +175,6 @@ router.post("/change-password", requireAuth, async (req, res) => {
   }
 });
 
-// ══ MOT DE PASSE OUBLIÉ ══
 router.post("/forgot-password", authLimiter, async (req, res) => {
   const mail = String(req.body?.email || "").toLowerCase().trim();
 
@@ -200,7 +184,6 @@ router.post("/forgot-password", authLimiter, async (req, res) => {
       const token = await createAuthToken(r.rows[0].id, "reset_password", 2);
       console.log(`[reset] ${mail} → ${token}`);
     }
-    // Réponse identique dans tous les cas : on ne révèle pas si l'e-mail existe
     res.json({ ok: true });
   } catch (e) {
     res.json({ ok: true });
@@ -226,8 +209,6 @@ router.post("/reset-password", authLimiter, async (req, res) => {
     res.status(500).json({ error: "Erreur serveur" });
   }
 });
-// ══ CONNEXION GOOGLE ══
-// L'app envoie l'idToken reçu de Google, le serveur le vérifie auprès de Google
 const GOOGLE_CLIENT_IDS = (process.env.GOOGLE_CLIENT_IDS || "")
   .split(",").map(s => s.trim()).filter(Boolean);
 
@@ -258,18 +239,15 @@ router.post("/google", authLimiter, async (req, res) => {
   try {
     await client.query("BEGIN");
 
-    // Compte existant par google_id, sinon par e-mail
     let r = await client.query("SELECT * FROM users WHERE google_id = $1", [payload.sub]);
 
     if (!r.rows.length) {
       r = await client.query("SELECT * FROM users WHERE email = $1", [email]);
 
       if (r.rows.length) {
-        // Compte e-mail existant → on y rattache Google
         await client.query("UPDATE users SET google_id = $1, email_verified = true WHERE id = $2",
           [payload.sub, r.rows[0].id]);
       } else {
-        // Nouveau compte, sans mot de passe
         r = await client.query(`
           INSERT INTO users (id, email, google_id, display_name, photo_url, email_verified)
           VALUES ($1,$2,$3,$4,$5,true)
@@ -298,15 +276,12 @@ router.post("/google", authLimiter, async (req, res) => {
     client.release();
   }
 });
-// ══ CONNEXION FACEBOOK ══
-// L'app envoie l'access_token, le serveur le vérifie auprès de Facebook
 router.post("/facebook", authLimiter, async (req, res) => {
   const accessToken = String(req.body?.accessToken || "");
   if (!accessToken) return res.status(400).json({ error: "Jeton manquant" });
 
   let fb;
   try {
-    // Vérifie que le jeton appartient bien à NOTRE application
     const appId     = process.env.FACEBOOK_APP_ID;
     const appSecret = process.env.FACEBOOK_APP_SECRET;
 
@@ -332,7 +307,6 @@ router.post("/facebook", authLimiter, async (req, res) => {
     return res.status(401).json({ error: "Jeton Facebook invalide" });
   }
 
-  // Facebook ne fournit pas toujours l'e-mail
   const email = (fb.email || "").toLowerCase() || `fb_${fb.id}@facebook.local`;
 
   const client = await pool.connect();
