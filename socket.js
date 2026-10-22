@@ -8,7 +8,6 @@ export function initSocket(httpServer) {
     pingTimeout: 30000,
   });
 
-  // Authentification à la connexion : pas de socket anonyme
   io.use((socket, next) => {
     const token = socket.handshake.auth?.token;
     if (!token) return next(new Error("Non authentifié"));
@@ -22,10 +21,7 @@ export function initSocket(httpServer) {
   });
 
   io.on("connection", (socket) => {
-    // Salon personnel : pour les notifications
     socket.join(`user:${socket.userId}`);
-
-    // Rejoindre une conversation — on vérifie l'appartenance côté serveur
     socket.on("join", async (conversationId) => {
       try {
         const r = await pool.query(
@@ -40,8 +36,6 @@ export function initSocket(httpServer) {
     socket.on("leave", (conversationId) => {
       socket.leave(`conv:${conversationId}`);
     });
-
-    // Indicateur « en train d'écrire »
     socket.on("typing", (conversationId) => {
       socket.to(`conv:${conversationId}`).emit("typing", { userId: socket.userId });
     });
