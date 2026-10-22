@@ -5,7 +5,6 @@ import { requireAuth, optionalAuth } from "../auth.js";
 
 const router = express.Router();
 
-// ── Validation ──
 const listingSchema = z.object({
   title:       z.string().min(3).max(200),
   description: z.string().max(5000).optional().default(""),
@@ -53,11 +52,8 @@ const toApi = (r) => ({
   status: r.status,
   createdAt: r.created_at,
 });
-
-// Arrondi ~100 m : le vendeur n'expose pas son domicile exact
 const blur = (v) => (v == null ? null : Math.round(Number(v) * 1000) / 1000);
 
-// ── Abonnement actif ? ──
 async function hasActiveSubscription(userId) {
   const r = await pool.query(`
     SELECT 1 FROM subscriptions
@@ -66,8 +62,6 @@ async function hasActiveSubscription(userId) {
   `, [userId]);
   return r.rows.length > 0;
 }
-
-// ══ LISTE (publique) ══
 router.get("/", optionalAuth, async (req, res) => {
   try {
     const limit  = Math.min(Number(req.query.limit) || 20, 100);
@@ -95,8 +89,6 @@ router.get("/", optionalAuth, async (req, res) => {
       where.push(`to_tsvector('french', l.title || ' ' || coalesce(l.description,''))
                   @@ plainto_tsquery('french', ${p})`);
     }
-
-    // Masquer les annonces des vendeurs bloqués
     if (req.user) {
       where.push(`l.seller_id <> ALL(
         COALESCE((SELECT blocked_users FROM users WHERE id = ${add(req.user.id)}), '{}')
@@ -120,8 +112,6 @@ router.get("/", optionalAuth, async (req, res) => {
     res.status(500).json({ error: "Erreur serveur" });
   }
 });
-
-// ══ DÉTAIL (publique) ══
 router.get("/:id", async (req, res) => {
   try {
     const r = await pool.query(`
@@ -141,8 +131,6 @@ router.get("/:id", async (req, res) => {
     res.status(400).json({ error: "Identifiant invalide" });
   }
 });
-
-// ══ CRÉER ══
 router.post("/", requireAuth, async (req, res) => {
   const parsed = listingSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -151,8 +139,6 @@ router.post("/", requireAuth, async (req, res) => {
 
   const client = await pool.connect();
   try {
-    // Le rôle vendeur et l'abonnement sont vérifiés côté SERVEUR,
-    // jamais côté app — le client est modifiable.
     const u = await client.query("SELECT role FROM users WHERE id = $1", [req.user.id]);
     if (u.rows[0]?.role !== "vendeur") {
       return res.status(403).json({ error: "Réservé aux vendeurs" });
@@ -160,8 +146,6 @@ router.post("/", requireAuth, async (req, res) => {
     if (!(await hasActiveSubscription(req.user.id))) {
       return res.status(402).json({ error: "Abonnement expiré", code: "subscription_required" });
     }
-
-    // Anti-spam : 5 annonces par heure maximum
     const recent = await client.query(`
       SELECT count(*)::int AS n FROM listings
       WHERE seller_id = $1 AND created_at > now() - interval '1 hour'
@@ -202,8 +186,6 @@ router.post("/", requireAuth, async (req, res) => {
     client.release();
   }
 });
-
-// ══ MODIFIER ══
 router.patch("/:id", requireAuth, async (req, res) => {
   const parsed = listingSchema.partial().safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Données invalides" });
@@ -244,8 +226,6 @@ router.patch("/:id", requireAuth, async (req, res) => {
     res.status(500).json({ error: "Erreur serveur" });
   }
 });
-
-// ══ SUPPRIMER ══
 router.delete("/:id", requireAuth, async (req, res) => {
   try {
     const r = await pool.query(
@@ -258,18 +238,14 @@ router.delete("/:id", requireAuth, async (req, res) => {
     res.status(500).json({ error: "Erreur serveur" });
   }
 });
-
-// ══ COMPTEUR DE VUES ══
 router.post("/:id/view", async (req, res) => {
   try {
     await pool.query("UPDATE listings SET views = views + 1 WHERE id = $1", [req.params.id]);
     res.json({ ok: true });
   } catch (e) {
-    res.json({ ok: true });   // jamais bloquant
+    res.json({ ok: true });   
   }
 });
-
-// ══ STATISTIQUES PUBLIQUES ══
 router.get("/stats/counts", async (req, res) => {
   try {
     const r = await pool.query(`
