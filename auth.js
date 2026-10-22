@@ -14,9 +14,6 @@ if (!ACCESS_SECRET || !REFRESH_SECRET) {
 
 export const hashPassword   = (pw) => bcrypt.hash(pw, 12);
 export const verifyPassword = (pw, hash) => bcrypt.compare(pw, hash);
-
-// On stocke un SHA-256 du refresh token, jamais le token lui-même :
-// une fuite de la base ne donne aucune session utilisable.
 const sha = (s) => crypto.createHash("sha256").update(s).digest("hex");
 
 export function signAccessToken(user) {
@@ -73,7 +70,7 @@ export async function revokeAllSessions(userId) {
   );
 }
 
-// ── Middleware ──
+// Middleware 
 export function requireAuth(req, res, next) {
   const h = req.headers.authorization || "";
   const token = h.startsWith("Bearer ") ? h.slice(7) : null;
@@ -110,7 +107,6 @@ export function requireRole(...roles) {
   };
 }
 
-// ── Jetons à usage unique ──
 export async function createAuthToken(userId, purpose, hours = 24) {
   const raw = crypto.randomBytes(32).toString("hex");
   await pool.query(`
@@ -128,8 +124,6 @@ export async function consumeAuthToken(raw, purpose) {
   `, [sha(raw), purpose]);
   return r.rows[0]?.user_id || null;
 }
-
-// ── Anti-force brute ──
 export async function tooManyAttempts(email) {
   const r = await pool.query(`
     SELECT count(*)::int AS n FROM login_attempts
