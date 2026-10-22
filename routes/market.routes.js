@@ -6,7 +6,6 @@ import { notify } from "../push.js";
 
 const router = express.Router();
 
-// ════════════════ FAVORIS ════════════════
 
 router.get("/favorites", requireAuth, async (req, res) => {
   try {
@@ -62,8 +61,6 @@ router.delete("/favorites/:listingId", requireAuth, async (req, res) => {
     res.status(500).json({ error: "Erreur serveur" });
   }
 });
-
-// ════════════════ COMMANDES ════════════════
 
 const orderSchema = z.object({
   listingId:   z.string().uuid(),
@@ -121,9 +118,6 @@ router.post("/orders", requireAuth, async (req, res) => {
 
   try {
     await client.query("BEGIN");
-
-    // Verrou sur la ligne : deux commandes simultanées ne peuvent pas
-    // vider le même stock.
     const l = await client.query(
       "SELECT * FROM listings WHERE id = $1 AND status = 'active' FOR UPDATE",
       [d.listingId]
@@ -146,8 +140,6 @@ router.post("/orders", requireAuth, async (req, res) => {
 
     const buyer  = await client.query("SELECT display_name, email FROM users WHERE id = $1", [req.user.id]);
     const seller = await client.query("SELECT display_name FROM users WHERE id = $1", [listing.seller_id]);
-
-    // Le prix vient de la BASE, jamais du client
     const r = await client.query(`
       INSERT INTO orders (buyer_id, seller_id, listing_id, listing_title, price, qty,
                           delivery_fee, seller_name, buyer_name, buyer_phone, buyer_email,
@@ -164,8 +156,6 @@ router.post("/orders", requireAuth, async (req, res) => {
     await client.query("UPDATE listings SET stock = stock - $1 WHERE id = $2", [d.qty, listing.id]);
 
     await client.query("COMMIT");
-
-    // Hors transaction : notify ouvre sa propre connexion
     notify(listing.seller_id, {
       type: "commande",
       title: "Nouvelle commande 📦",
@@ -182,8 +172,6 @@ router.post("/orders", requireAuth, async (req, res) => {
     client.release();
   }
 });
-
-// ── CHANGER LE STATUT ──
 const FLOW = {
   pending:   ["confirmed", "cancelled"],
   confirmed: ["shipping", "cancelled"],
@@ -261,8 +249,6 @@ router.patch("/orders/:id/status", requireAuth, async (req, res) => {
     client.release();
   }
 });
-
-// ════════════════ NOTES ════════════════
 
 router.post("/orders/:id/rate", requireAuth, async (req, res) => {
   const stars   = Number(req.body?.stars);
