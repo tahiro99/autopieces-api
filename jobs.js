@@ -2,7 +2,6 @@ import cron from "node-cron";
 import { pool } from "./db.js";
 import { notify } from "./push.js";
 
-// ── Abonnements expirés ──
 async function expireSubscriptions() {
   try {
     const r = await pool.query(`
@@ -26,10 +25,8 @@ async function expireSubscriptions() {
   }
 }
 
-// ── Rappels avant expiration ──
 async function remindSubscriptions() {
   try {
-    // À 7 jours et à 2 jours de l'échéance
     for (const days of [7, 2]) {
       const r = await pool.query(`
         SELECT user_id FROM subscriptions
@@ -51,10 +48,8 @@ async function remindSubscriptions() {
   }
 }
 
-// ── Nettoyage ──
 async function cleanup() {
   try {
-    // Sessions révoquées ou expirées depuis plus de 30 jours
     const s = await pool.query(`
       DELETE FROM sessions
       WHERE expires_at < now() - interval '30 days'
@@ -69,7 +64,6 @@ async function cleanup() {
       DELETE FROM login_attempts WHERE created_at < now() - interval '7 days'
     `);
 
-    // Notifications lues de plus de 60 jours
     const n = await pool.query(`
       DELETE FROM notifications WHERE read = true AND created_at < now() - interval '60 days'
     `);
@@ -80,7 +74,6 @@ async function cleanup() {
   }
 }
 
-// ── Commandes oubliées ──
 async function remindPendingOrders() {
   try {
     const r = await pool.query(`
@@ -120,7 +113,6 @@ export function startJobs() {
   console.log("[cron] tâches planifiées démarrées (Africa/Algiers)");
 }
 
-// Permet de lancer une tâche à la main : node jobs.js expire
 if (process.argv[2]) {
   const tasks = { expire: expireSubscriptions, remind: remindSubscriptions,
                   cleanup, pending: remindPendingOrders };
