@@ -34,7 +34,6 @@ const toMsg = (m) => ({
   createdAt: m.created_at,
 });
 
-// ══ MES CONVERSATIONS ══
 router.get("/conversations", requireAuth, async (req, res) => {
   try {
     const r = await pool.query(`
@@ -62,8 +61,6 @@ router.get("/conversations", requireAuth, async (req, res) => {
   }
 });
 
-// ══ OUVRIR / CRÉER UNE CONVERSATION ══
-// ══ OUVRIR / CRÉER UNE CONVERSATION ══
 router.post("/conversations", requireAuth, async (req, res) => {
   const listingId = String(req.body?.listingId || "");
   if (!listingId) return res.status(400).json({ error: "Annonce manquante" });
@@ -102,7 +99,6 @@ router.post("/conversations", requireAuth, async (req, res) => {
   }
 });
 
-// ══ MESSAGES D'UNE CONVERSATION ══
 router.get("/conversations/:id/messages", requireAuth, async (req, res) => {
   try {
     const c = await pool.query(
@@ -129,7 +125,6 @@ router.get("/conversations/:id/messages", requireAuth, async (req, res) => {
   }
 });
 
-// ══ ENVOYER UN MESSAGE ══
 const msgSchema = z.object({
   text:     z.string().max(2000).optional().default(""),
   imageUrl: z.string().url().optional().nullable(),
@@ -154,7 +149,6 @@ router.post("/conversations/:id/messages", requireAuth, async (req, res) => {
       return res.status(403).json({ error: "Accès refusé" });
     }
 
-    // Blocage dans les deux sens
     const b = await client.query(`
       SELECT
         $2 = ANY(COALESCE((SELECT blocked_users FROM users WHERE id=$1),'{}')) AS i_blocked,
@@ -165,7 +159,6 @@ router.post("/conversations/:id/messages", requireAuth, async (req, res) => {
       return res.status(403).json({ error: "Conversation indisponible" });
     }
 
-    // Anti-spam : 30 messages par minute
     const rate = await client.query(`
       SELECT count(*)::int AS n FROM messages
       WHERE sender_id = $1 AND created_at > now() - interval '1 minute'
@@ -197,8 +190,6 @@ router.post("/conversations/:id/messages", requireAuth, async (req, res) => {
       body: isImg ? "Vous a envoyé une image" : parsed.data.text.trim().slice(0, 80),
       data: { screen: "Chat", conversationId: conv.id },
     }).catch(() => {});
-
-    // Diffusion temps réel
     req.app.get("io")?.to(`conv:${conv.id}`).emit("message", msg);
     req.app.get("io")?.to(`user:${other}`).emit("conversation_updated", { conversationId: conv.id });
 
@@ -211,8 +202,6 @@ router.post("/conversations/:id/messages", requireAuth, async (req, res) => {
     client.release();
   }
 });
-
-// ══ BLOQUER / DÉBLOQUER ══
 router.post("/users/:id/block", requireAuth, async (req, res) => {
   if (req.params.id === req.user.id) {
     return res.status(400).json({ error: "Action impossible" });
@@ -239,8 +228,6 @@ router.delete("/users/:id/block", requireAuth, async (req, res) => {
     res.status(500).json({ error: "Erreur serveur" });
   }
 });
-
-// ══ SIGNALER ══
 router.post("/reports", requireAuth, async (req, res) => {
   const { targetUserId, targetListingId, reason } = req.body || {};
   if (!reason || (!targetUserId && !targetListingId)) {
