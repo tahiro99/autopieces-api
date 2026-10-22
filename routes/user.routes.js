@@ -10,8 +10,6 @@ import rateLimit from "express-rate-limit";
 const router = express.Router();
 const UPLOAD_DIR = path.resolve("uploads");
 const PUBLIC_URL = process.env.PUBLIC_URL || "http://localhost:3000";
-
-// ══ PROFIL ══
 const profileSchema = z.object({
   displayName: z.string().min(2).max(80).optional(),
   phone:       z.string().max(20).optional(),
@@ -50,8 +48,6 @@ router.patch("/me", requireAuth, async (req, res) => {
     res.status(500).json({ error: "Erreur serveur" });
   }
 });
-
-// ── Choisir son rôle (une seule fois) ──
 router.post("/me/role", requireAuth, async (req, res) => {
   const role = req.body?.role;
   if (!["client", "vendeur"].includes(role)) {
@@ -62,16 +58,12 @@ router.post("/me/role", requireAuth, async (req, res) => {
   try {
     await client.query("BEGIN");
 
-    const u = await client.query("SELECT role FROM users WHERE id = $1 FOR UPDATE", [req.user.id]);
-    // On ne change pas un rôle déjà défini : sinon un client se ferait vendeur gratuitement
-    if (u.rows[0]?.role) {
+    const u = await client.query("SELECT role FROM users WHERE id = $1 FOR UPDATE", [req.user.id]);    if (u.rows[0]?.role) {
       await client.query("ROLLBACK");
       return res.status(409).json({ error: "Rôle déjà défini" });
     }
 
     await client.query("UPDATE users SET role = $1 WHERE id = $2", [role, req.user.id]);
-
-    // Essai gratuit de 14 jours pour les vendeurs
     if (role === "vendeur") {
       await client.query(`
         INSERT INTO subscriptions (user_id, status, plan, current_period_end)
@@ -88,8 +80,6 @@ router.post("/me/role", requireAuth, async (req, res) => {
     client.release();
   }
 });
-
-// ── Mon abonnement ──
 router.get("/me/subscription", requireAuth, async (req, res) => {
   try {
     const r = await pool.query(`
@@ -116,7 +106,6 @@ router.get("/me/subscription", requireAuth, async (req, res) => {
   }
 });
 
-// ── Jeton FCM (notifications push) ──
 router.post("/me/fcm-token", requireAuth, async (req, res) => {
   const token = String(req.body?.token || "").trim();
   if (!token) return res.status(400).json({ error: "Jeton manquant" });
@@ -144,7 +133,6 @@ router.delete("/me/fcm-token", requireAuth, async (req, res) => {
   }
 });
 
-// ══ NOTIFICATIONS ══
 router.get("/notifications", requireAuth, async (req, res) => {
   try {
     const r = await pool.query(`
@@ -185,7 +173,6 @@ router.post("/notifications/read-all", requireAuth, async (req, res) => {
   }
 });
 
-// ══ UPLOAD D'IMAGES ══
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 8 * 1024 * 1024, files: 1 },
@@ -217,10 +204,8 @@ router.post("/upload", uploadLimiter, requireAuth, upload.single("image"), async
 
   try {
     const name = `${kind}_${req.user.id}_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
-
-    // sharp lit l'image réelle : un fichier malveillant renommé en .jpg échoue ici
     await sharp(req.file.buffer)
-      .rotate()                                  // respecte l'orientation EXIF
+      .rotate()                                 
       .resize(sizes.w, sizes.w, { fit: "inside", withoutEnlargement: true })
       .webp({ quality: 82 })
       .toFile(path.join(UPLOAD_DIR, `${name}.webp`));
@@ -240,7 +225,6 @@ router.post("/upload", uploadLimiter, requireAuth, upload.single("image"), async
     res.status(400).json({ error: "Image invalide" });
   }
 });
-// ── Demande de renouvellement ──
 router.post("/me/subscription/renew", requireAuth, async (req, res) => {
   const { plan, months, amount, phone, receiptUrl } = req.body || {};
 
